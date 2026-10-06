@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="km">
 <head>
+  <base target="_top">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -72,11 +73,10 @@
 
     input, select, textarea {
       width: 100%; font: inherit; color: var(--text); background: var(--field);
-      border: 1.5px solid var(--line); border-radius: 10px; padding: 11px 12px; min-height: 46px;
+      border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; min-height: 46px;
       outline: none; transition: border-color .15s, box-shadow .15s; -webkit-appearance: none; appearance: none;
     }
     select {
-      font-size: 13px;
       padding-right: 36px; cursor: pointer;
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%237a8394' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
       background-repeat: no-repeat; background-position: right 14px center;
@@ -159,7 +159,7 @@
         root.classList.toggle('compact', w < 380);
         root.classList.toggle('narrow', w < 420);
         var v = document.getElementById('ver');
-        if (v) v.textContent = 'v5 · ' + w + 'px (frame ' + window.innerWidth + ', screen ' + (window.screen ? screen.width : '?') + ')';
+        if (v) v.textContent = 'v6 · ' + w + 'px (frame ' + window.innerWidth + ', screen ' + (window.screen ? screen.width : '?') + ')';
       }
       window.fitScreen = fitScreen;
       fitScreen();
@@ -287,7 +287,7 @@
     </div>
   </div>
 
-  <script type="application/json" id="boot"></script>
+  <script type="application/json" id="boot"><?!= bootJson ?></script>
   <script>
   // Only used when this page is hosted outside Apps Script (e.g. GitHub Pages):
   // paste your Web app URL ending in /exec.
@@ -304,17 +304,33 @@
     // Served by Apps Script: data is already in the page. Hosted elsewhere: ask the script for it.
     var embedded = null;
     try { embedded = JSON.parse($('boot').textContent); } catch (e) {}
+    var refreshBoot = null; // set by start(); updates the open form with fresh data
     if (embedded) {
       start(embedded);
     } else {
+      // Show the form at once from the copy saved on this phone last time, then refresh it from the Sheet.
       var q = location.search.replace(/^\?/, '');
+      var params = {};
+      q.split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) params[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); });
+      var tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+      var who = params.uid || (tgUser && String(tgUser.id)) || '';
+      var cached = null;
+      try { cached = JSON.parse(localStorage.getItem('otBoot') || 'null'); } catch (e) {}
+      if (cached && cached.projects) {
+        var d = new Date();
+        cached.today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        cached.auth = params.uid && params.ts && params.sig ? { uid: params.uid, ts: params.ts, sig: params.sig } : null;
+        if (!cached.user || cached.user.id !== who) cached.user = null;
+        start(cached, true);
+      }
       var url = API_URL + '?action=boot' + (q ? '&' + q : '') +
         '&initData=' + encodeURIComponent((tg && tg.initData) || '');
       fetch(url).then(function (r) { return r.json(); }).then(function (res) {
         if (!res.ok) throw new Error(res.error);
-        start(res.boot);
+        try { localStorage.setItem('otBoot', JSON.stringify(res.boot)); } catch (e) {}
+        if (refreshBoot) refreshBoot(res.boot); else start(res.boot);
       }).catch(function (err) {
-        $('loading').textContent = 'មិនអាចផ្ទុកបានទេ / Could not load the form: ' + (err.message || err);
+        if (!refreshBoot) $('loading').textContent = 'មិនអាចផ្ទុកបានទេ / Could not load the form: ' + (err.message || err);
       });
     }
 
@@ -332,46 +348,71 @@
       }).catch(onFail);
     }
 
-    function start(B) {
+    function start(B, fromCache) {
     $('loading').hidden = true;
     $('otForm').hidden = false;
+    var initData = tg && tg.initData;
 
     // ── Employee (signed bot link first, Telegram initData as fallback)
-    var user = B.user;
-    var initData = tg && tg.initData;
-    if (!user && initData && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-      var u = tg.initDataUnsafe.user;
-      user = { id: String(u.id), name: [u.first_name, u.last_name].filter(Boolean).join(' '), username: u.username || '' };
+    function renderUser(final) {
+      var user = B.user;
+      if (!user && initData && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+        var u = tg.initDataUnsafe.user;
+        user = { id: String(u.id), name: [u.first_name, u.last_name].filter(Boolean).join(' '), username: u.username || '' };
+      }
+      if (user) {
+        $('empName').textContent = user.name;
+        $('empSub').textContent = (user.username ? '@' + user.username + ' · ' : '') + 'ID ' + (user.staffId || user.id);
+        $('avatar').textContent = (user.name || '?').trim().charAt(0).toUpperCase();
+      }
+      // Until the server has answered, a missing user may just mean "not loaded yet".
+      $('authAlert').hidden = !!user || !final;
+      if (final && !user) $('submitBtn').disabled = true;
     }
-    if (user) {
-      $('empName').textContent = user.name;
-      $('empSub').textContent = (user.username ? '@' + user.username + ' · ' : '') + 'ID ' + (user.staffId || user.id);
-      $('avatar').textContent = (user.name || '?').trim().charAt(0).toUpperCase();
-    } else {
-      $('authAlert').hidden = false;
-      $('submitBtn').disabled = true;
-    }
+    renderUser(!fromCache);
 
     // ── Dropdowns from the Google Sheet
-    B.projects.forEach(function (p) { $('project').add(new Option(p.name + ' · ' + p.id, p.id)); });
+    function renderProjects() {
+      var sel = $('project'), keep = sel.value;
+      while (sel.options.length > 1) sel.remove(1);
+      B.projects.forEach(function (p) { sel.add(new Option(p.name + ' · ' + p.id, p.id)); });
+      sel.value = B.projects.some(function (p) { return p.id === keep; }) ? keep : '';
+    }
+    renderProjects();
     B.otTypes.forEach(function (t) { $('otType').add(new Option(t.km + ' / ' + t.en, t.id)); });
     function fillTasks() {
-      var sel = $('task');
+      var sel = $('task'), keep = sel.value;
       sel.innerHTML = '';
       sel.add(new Option(B.wholeProject, B.wholeProject));
       (B.tasks[$('project').value] || []).forEach(function (t) { sel.add(new Option(t, t)); });
+      if (keep) sel.value = keep;
+      if (!sel.value) sel.value = B.wholeProject;
     }
     $('project').addEventListener('change', fillTasks);
     fillTasks();
 
     // OT date is always today (the server enforces it too).
-    $('date').value = B.today;
-    var dow = new Date(B.today + 'T00:00:00').getDay();
     var kmDays = ['អាទិត្យ', 'ច័ន្ទ', 'អង្គារ', 'ពុធ', 'ព្រហស្បតិ៍', 'សុក្រ', 'សៅរ៍'];
     var enDays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    var ymd = B.today.split('-');
-    $('dateText').textContent = ymd[2] + '/' + ymd[1] + '/' + ymd[0] + ' · ' + kmDays[dow] + ' / ' + enDays[dow];
-    $('otType').value = (dow === 0 || dow === 6) ? 'weekend' : 'weekday';
+    function renderDate(setType) {
+      $('date').value = B.today;
+      var dow = new Date(B.today + 'T00:00:00').getDay();
+      var ymd = B.today.split('-');
+      $('dateText').textContent = ymd[2] + '/' + ymd[1] + '/' + ymd[0] + ' · ' + kmDays[dow] + ' / ' + enDays[dow];
+      if (setType) $('otType').value = (dow === 0 || dow === 6) ? 'weekend' : 'weekday';
+    }
+    renderDate(true);
+
+    // Fresh data from the Sheet replaces the saved copy without losing what the user already picked.
+    refreshBoot = function (fresh) {
+      var dateChanged = fresh.today !== B.today;
+      B.user = fresh.user; B.auth = fresh.auth || B.auth;
+      B.projects = fresh.projects; B.tasks = fresh.tasks; B.wholeProject = fresh.wholeProject; B.today = fresh.today;
+      renderUser(true);
+      renderProjects();
+      fillTasks();
+      renderDate(dateChanged);
+    };
 
     // ── Hours (end before start = crosses midnight; same rule as the server)
     function hours() {
