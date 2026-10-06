@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="km">
 <head>
-  <base target="_top">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -49,6 +48,22 @@
       padding: 11px 12px; border-radius: 10px; border: 1px dashed var(--line); background: var(--accent-soft); color: var(--text); }
     .readonly::after { content: "🔒"; font-size: 13px; opacity: .6; }
     .loading { padding: 40px 16px; text-align: center; color: var(--muted); }
+    /* ── Dropdown lists (custom, because Android's own list ignores page styles) */
+    :root { --list-font: 12px; }   /* ← text size of the dropdown lists: change this number */
+    select.native-hidden { display: none !important; }
+    .selbtn { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 10px;
+      padding: 11px 12px; cursor: pointer; text-align: left; }
+    .selbtn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .selbtn.placeholder span { color: var(--muted); }
+    .selbtn svg { flex: none; color: var(--muted); }
+    select.invalid + .selbtn { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(217,58,58,.12); }
+    .listsheet { max-height: 70vh; display: flex; flex-direction: column; }
+    .listsheet .opts { overflow-y: auto; margin: 8px -4px 0; }
+    .opt { display: block; width: 100%; text-align: left; font: inherit; font-size: var(--list-font); line-height: 1.4;
+      padding: 11px 10px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text); cursor: pointer; }
+    .opt:last-child { border-bottom: 0; }
+    .opt.on { color: var(--primary-2); font-weight: 700; background: var(--accent-soft); border-radius: 8px; }
     .ver { text-align: center; color: var(--muted); font-size: 11px; opacity: .7; margin: 10px 0 2px; }
 
     .sheet { max-width: min(560px, calc(var(--fit-w, 100vw) - 2 * var(--gutter, 12px))); margin: 0 auto; background: var(--card); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
@@ -159,7 +174,7 @@
         root.classList.toggle('compact', w < 380);
         root.classList.toggle('narrow', w < 420);
         var v = document.getElementById('ver');
-        if (v) v.textContent = 'v6 · ' + w + 'px (frame ' + window.innerWidth + ', screen ' + (window.screen ? screen.width : '?') + ')';
+        if (v) v.textContent = 'v7 · ' + w + 'px (frame ' + window.innerWidth + ', screen ' + (window.screen ? screen.width : '?') + ')';
       }
       window.fitScreen = fitScreen;
       fitScreen();
@@ -270,6 +285,13 @@
     <div class="ver" id="ver"></div>
   </div>
 
+  <div class="overlay" id="listOverlay" hidden>
+    <div class="picker listsheet" role="dialog" aria-modal="true">
+      <h3 id="listTitle"></h3>
+      <div class="opts" id="listOptions"></div>
+    </div>
+  </div>
+
   <div class="overlay" id="timeOverlay" hidden>
     <div class="picker" role="dialog" aria-modal="true">
       <h3 id="pickerTitle"></h3>
@@ -287,7 +309,7 @@
     </div>
   </div>
 
-  <script type="application/json" id="boot"><?!= bootJson ?></script>
+  <script type="application/json" id="boot"></script>
   <script>
   // Only used when this page is hosted outside Apps Script (e.g. GitHub Pages):
   // paste your Web app URL ending in /exec.
@@ -351,6 +373,47 @@
     function start(B, fromCache) {
     $('loading').hidden = true;
     $('otForm').hidden = false;
+
+    // ── Dropdowns open our own list (its text size is --list-font in the styles above)
+    var chevron = '<svg width="12" height="8" viewBox="0 0 12 8"><path d="M1 1l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+    ['project', 'task', 'otType'].forEach(function (id) {
+      var sel = $(id), b = document.createElement('button');
+      sel.classList.add('native-hidden');
+      b.type = 'button'; b.className = 'selbtn'; b.dataset.for = id;
+      b.innerHTML = '<span></span>' + chevron;
+      sel.parentNode.insertBefore(b, sel.nextSibling);
+      b.addEventListener('click', function (e) { e.preventDefault(); openList(id); });
+    });
+    function syncPickers() {
+      document.querySelectorAll('.selbtn').forEach(function (b) {
+        var sel = $(b.dataset.for), o = sel.options[sel.selectedIndex];
+        b.firstChild.textContent = o ? o.text : '';
+        b.classList.toggle('placeholder', !sel.value);
+      });
+    }
+    function openList(id) {
+      var sel = $(id), label = sel.closest('.field').querySelector('.label');
+      $('listTitle').textContent = label.firstChild.textContent + ' / ' + label.querySelector('small').textContent;
+      var box = $('listOptions');
+      box.innerHTML = '';
+      Array.prototype.forEach.call(sel.options, function (o) {
+        if (!o.value) return; // skip the "Choose project" placeholder
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'opt' + (o.value === sel.value ? ' on' : ''); b.textContent = o.text;
+        b.addEventListener('click', function () {
+          sel.value = o.value;
+          sel.classList.remove('invalid');
+          sel.dispatchEvent(new Event('change'));
+          $('listOverlay').hidden = true;
+          syncPickers();
+        });
+        box.appendChild(b);
+      });
+      $('listOverlay').hidden = false;
+      var on = box.querySelector('.on');
+      if (on) on.scrollIntoView({ block: 'center' });
+    }
+    $('listOverlay').addEventListener('click', function (e) { if (e.target === this) this.hidden = true; });
     var initData = tg && tg.initData;
 
     // ── Employee (signed bot link first, Telegram initData as fallback)
@@ -377,6 +440,7 @@
       while (sel.options.length > 1) sel.remove(1);
       B.projects.forEach(function (p) { sel.add(new Option(p.name + ' · ' + p.id, p.id)); });
       sel.value = B.projects.some(function (p) { return p.id === keep; }) ? keep : '';
+      syncPickers();
     }
     renderProjects();
     B.otTypes.forEach(function (t) { $('otType').add(new Option(t.km + ' / ' + t.en, t.id)); });
@@ -387,6 +451,7 @@
       (B.tasks[$('project').value] || []).forEach(function (t) { sel.add(new Option(t, t)); });
       if (keep) sel.value = keep;
       if (!sel.value) sel.value = B.wholeProject;
+      syncPickers();
     }
     $('project').addEventListener('change', fillTasks);
     fillTasks();
@@ -400,6 +465,7 @@
       var ymd = B.today.split('-');
       $('dateText').textContent = ymd[2] + '/' + ymd[1] + '/' + ymd[0] + ' · ' + kmDays[dow] + ' / ' + enDays[dow];
       if (setType) $('otType').value = (dow === 0 || dow === 6) ? 'weekend' : 'weekday';
+      syncPickers();
     }
     renderDate(true);
 
